@@ -199,12 +199,15 @@ class Mamba2(nn.Module, PyTorchModelHubMixin):
         cu_seqlens: Optional[torch.Tensor] = None,
         inference_params=None,
         hw: Optional[Tuple[int, int]] = None,  # (H, W) required for 2D conv
+        conv_perm = None,
+        conv_inv_perm = None
     ):
         """
         u: (B, L, D) if u is 3D; or u is (B*L, D) if packed (then pass seqlen=L).
         For 2D conv, pass hw=(H, W) such that H*W == L.
         Returns: same "packedness" as input (3D in, 3D out; 2D in, 2D out).
         """
+
         # --- detect packed vs batched input ---
         packed_input = (u.dim() == 2)
         if not packed_input:
@@ -317,6 +320,9 @@ class Mamba2(nn.Module, PyTorchModelHubMixin):
 
         else:
             # 2D conv branch (causal optional, no custom CUDA)
+            if conv_inv_perm is not None:
+                xBC = xBC[:, conv_inv_perm, :]
+
             B, L, Dtot = xBC.shape
             H, W = hw
             xBC_2d = rearrange(xBC, "b (h w) d -> b d h w", h=H, w=W).contiguous()
@@ -339,6 +345,9 @@ class Mamba2(nn.Module, PyTorchModelHubMixin):
                 xBC_2d = self.act(self.conv2d(xBC_2d))
             
             xBC = rearrange(xBC_2d, "b d h w -> b (h w) d")
+
+            if conv_perm is not None:
+                xBC = xBC[:, conv_perm, :]
     
         # --- Scan (SSM) ---
         x, Bv, Cv = torch.split(
@@ -371,6 +380,7 @@ class Mamba2(nn.Module, PyTorchModelHubMixin):
         if packed_input:
             y = rearrange(y, "b l d -> (b l) d")
         out = self.out_proj(y)
+
         return out
 
     # --- 1D decoding step path (unchanged). Not supported for 2D. ---
